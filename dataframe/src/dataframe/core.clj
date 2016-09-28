@@ -1,11 +1,23 @@
 (ns dataframe.core
   (:require [clojure.data.csv :as csv]))
 
-(defn maybe-number
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Internal helpers
+(defn- maybe-number
   [s]
   (let [num? (clojure.edn/read-string s)]
     (if (number? num?) num? s)))
 
+(defn- get-col
+  [df col]
+  (if-let [col-index (cond (string? col) (ffirst (filter #(= col (second %))
+                                                         (map-indexed vector (:column-labels df))))
+                           (number? col) col)]
+    (get (:cols df) col-index)
+    (throw (Exception. (format "Could not find index %s in df." col)))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Public interface
 (defn csv->df
   [csv & {:keys [:header-row :skip-rows]
           :or {:header-row false
@@ -32,13 +44,13 @@
   [df]
   (-> df :cols first count))
 
-(defn get-col
-  [df col]
-  (if-let [col-index (cond (string? col) (ffirst (filter #(= col (second %))
-                                                         (map-indexed vector (:column-labels df))))
-                           (number? col) col)]
-    (get (:cols df) col-index)
-    (throw (Exception. (format "Could not find index %s in df." col)))))
+(defn cols
+  [df]
+  (:cols df))
+
+(defn rows
+  [df]
+  (apply mapv vector (:cols df)))
 
 (defn stats
   ([df]
