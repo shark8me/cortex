@@ -45,6 +45,7 @@
                        decay epsilon grad-accum dx-accum])
   (nio-adam-step! [gradient parameters gradient-alpha param-offset alpha beta1 beta2 epsilon
                    pow_beta1_t pow_beta2_t m v])
+  (nio-momentum-step! [gradient parameters gradient-alpha param-offset gamma eta v-sub-t-1])
   (nio-planar-input->convolution! [input input-convolved conv-config])
   (nio-convolution->planar-output! [input-convolved input-gradient conv-config])
   (nio-fill [buffer value])
@@ -505,6 +506,10 @@ in order to avoid adding a small number to 0."
                           param-offset (double alpha) (double beta1) (double beta2)
                           (double epsilon) (double pow-beta1-t) (double pow-beta2-t)
                           (.array m) (.array v)))
+  (nio-momentum-step! [gradient ^DoubleBuffer parameters gradient-alpha param-offset
+                       gamma eta ^DoubleBuffer v-sub-t-1]
+    (opt/momentum-step (double gradient-alpha) (.array gradient) (.array parameters)
+                       param-offset (double gamma) (double eta) (.array v-sub-t-1)))
   (nio-planar-input->convolution! [input ^DoubleBuffer input-convolved
                                    ^ConvLayerConfig conv-config]
     (nio-planar-input->convolution!-impl input input-convolved conv-config double))
@@ -566,6 +571,10 @@ in order to avoid adding a small number to 0."
     (AdamOptimiser/step_f (float gradient-alpha) (.array gradient) (.array parameters)
                           param-offset (float alpha) (float beta1) (float beta2) (float epsilon)
                           (float pow-beta1-t) (float pow-beta2-t) (.array m) (.array v)))
+  (nio-momentum-step! [gradient ^FloatBuffer parameters gradient-alpha param-offset
+                       gamma eta ^FloatBuffer v-sub-t-1]
+    (opt/momentum-step (float gradient-alpha) (.array gradient) (.array parameters)
+                       param-offset (float gamma) (float eta) (.array v-sub-t-1)))
   (nio-planar-input->convolution! [input ^FloatBuffer input-convolved
                                    ^ConvLayerConfig conv-config]
     (nio-planar-input->convolution!-impl input input-convolved conv-config float))
@@ -942,6 +951,11 @@ in order to avoid adding a small number to 0."
       (nio-adam-step! (.device-buffer gradient) (.device-buffer parameters)
                       gradient-alpha param-offset alpha beta1 beta2 epsilon
                       pow-beta1-t pow-beta2-t (.device-buffer m) (.device-buffer v))))
+  (momentum-step! [backend ^DeviceArray gradient ^DeviceArray parameters gradient-alpha param-offset
+                   gamma eta ^DeviceArray v-sub-t-1]
+    (cpu-drv/with-stream-dispatch (.stream backend)
+      (nio-momentum-step! (.device-buffer gradient) (.device-buffer parameters)
+                          gradient-alpha param-offset gamma eta (.device-buffer v-sub-t-1))))
   nn-backend/PDropout
   (prepare-bernoulli-dropout! [backend probability rand-buffer mult-buffer]
     (cpu-drv/with-stream-dispatch (.stream backend)

@@ -29,13 +29,43 @@ optimisers specifically and loss functions."
    :beta2 0.999
    :epsilon 1e-8})
 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Links related to momentum/nesterov (in decreasing order of interest)
+;; http://sebastianruder.com/optimizing-gradient-descent/index.html
+;; http://www.cs.utoronto.ca/~ilya/pubs/ilya_sutskever_phd_thesis.pdf
+;; http://www.cs.toronto.edu/~hinton/absps/momentum.pdf
+;; https://arxiv.org/pdf/1212.0901v2.pdf
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(defn momentum-step
+  "v-sub-t-1 is the delta from the last step, we use that to gain momentum when
+  there isn't much curviture.
+  See: http://sebastianruder.com/optimizing-gradient-descent/index.html#momentum
+  TODO: Consider Java CPU version (perf & float/double support, c.f. adam/adadelta)
+        as well as GPU version."
+  [gradient-alpha ^doubles gradient ^doubles parameters param-offset
+   gamma eta ^doubles v-sub-t-1]
+  (doseq [i (range (count gradient))]
+    (let [param-idx (+ i param-offset)
+          v-sub-t (+ (* gamma (aget v-sub-t-1 param-idx))
+                     (* eta (aget gradient i) gradient-alpha))
+          theta (aget parameters i)]
+      (aset parameters i (- theta v-sub-t))
+      (aset v-sub-t-1 param-idx v-sub-t))))
+
+(defn momentum-options
+  []
+  {:type :momentum
+   :gamma 0.9
+   :eta 0.001 #_learning-rate})
 
 (defprotocol POptimiseBackend
   "Perform one step of the adadelta calculation.  Because the gradients and parameters may be stored in different
 buffers the param offset is required as the accumulation buffers are only one buffer."
   (adadelta-step! [backend gradient parameters gradient-alpha param-offset decay epsilon grad_sq_accum dx_sq_accum])
   (adam-step! [backend gradient parameters gradient-alpha param-offset alpha beta1 beta2 epsilon
-               pow_beta1_t pow_beta2_t m v]))
+               pow_beta1_t pow_beta2_t m v])
+  (momentum-step! [backend gradient parameters gradient-alpha param-offset gamma eta v-sub-t-1]))
 
 
 ;;Specific items implement this
@@ -53,6 +83,7 @@ buffers the param offset is required as the accumulation buffers are only one bu
 
 (defn adadelta [] (->Optimiser (adadelta-options)))
 (defn adam [] (->Optimiser (adam-options)))
+(defn momentum [] (->Optimiser (momentum-options)))
 
 (extend-type Optimiser
   PGradientOptimiser
@@ -72,6 +103,7 @@ buffers the param offset is required as the accumulation buffers are only one bu
                                     :v (math/new-array driver stream datatype [param-count])
                                     :pow-beta1-t 1.0
                                     :pow-beta2-t 1.0)
+        (= optim-type :momentum) (assoc optimiser :v-sub-t-1 (math/new-array driver stream datatype [param-count]))
         :else
         (throw (Exception. (str "Unrecognized optimization type " options))))))
   (batch-update [optimiser]
@@ -92,6 +124,9 @@ buffers the param offset is required as the accumulation buffers are only one bu
         (adam-step! (:backend optimiser) gradient parameters gradient-alpha offset
                     (:alpha options) (:beta1 options) (:beta2 options) (:epsilon options)
                     (:pow-beta1-t optimiser) (:pow-beta2-t optimiser) (:m optimiser) (:v optimiser))
+        (= optim-type :momentum)
+        (momentum-step! (:backend optimiser) gradient parameters gradient-alpha offset
+                        (:gamma options) (:eta options) (:v-sub-t-1 optimiser))
         :else
         (throw (Exception. (str "Unrecognized optimization type " options)))))
     optimiser))

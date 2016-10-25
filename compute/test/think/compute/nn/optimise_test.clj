@@ -10,6 +10,11 @@
   []
   (cpu-net/create-cpu-backend *datatype*))
 
-
 (def-double-float-test adam
   (verify-optimise/test-adam (create-backend)))
+
+(deftest momentum
+  (verify-optimise/test-momentum (create-backend)))
+
+(deftest nesterov
+  (verify-optimise/test-nesterov (create-backend)))

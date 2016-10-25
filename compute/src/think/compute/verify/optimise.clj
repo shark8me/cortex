@@ -43,3 +43,51 @@
                 optimizer))
             optimizer
             adam-answers)))
+
+(defn test-momentum
+  [backend]
+  (let [df #(* 2.0 %)
+        parameters (nn-backend/array backend [8.0])
+        optimizer (opt/setup-optimiser (opt/momentum) backend 1)
+        final-param-vec (loop [i 1000]
+                          (if (zero? i)
+                            (->> parameters (nn-backend/to-double-array backend) vec)
+                            (let [gradient (nn-backend/array backend (map df (nn-backend/to-double-array backend parameters)))]
+                              (opt/compute-parameters! optimizer 1.0 0 gradient parameters)
+                              (recur (dec i)))))]
+    #_(println final-param-vec)
+    (is (every? #(< % 1e-6) final-param-vec))))
+
+(defn test-nesterov
+  "Like momentum, but we modify the params before calculating the gradient.
+  See: http://sebastianruder.com/optimizing-gradient-descent/index.html#nesterovacceleratedgradient"
+  [backend]
+  (let [df #(* 2.0 %)
+        parameters (nn-backend/array backend [8.0])
+        optimizer (opt/setup-optimiser (opt/momentum) backend 1)
+        final-param-vec (loop [i 1000]
+                          (if (zero? i)
+                            (->> parameters (nn-backend/to-double-array backend) vec)
+                            (let [gamma (:gamma (.options optimizer))
+                                  v-sub-t-1-vec (->> optimizer :v-sub-t-1 (nn-backend/to-double-array backend) vec)
+                                  param-vec (->> parameters (nn-backend/to-double-array backend) vec)
+                                  ;; TODO: This depends on the vecs being the same length (incompatible w/ multiple layers)
+                                  ;;       Perhaps fixable by creating an appropriate view (subvec) into v-sub-t-1?
+                                  nesterov-params (mapv (fn [param last-update]
+                                                          (- param (* gamma last-update)))
+                                                        param-vec v-sub-t-1-vec)
+                                  ;; Note: Here df is a pure function of the parameters, in a neural net this means (I think)
+                                  ;;       speculatively updating the weights and running the net forward again (to get an
+                                  ;;       output -> error -> gradient).
+                                  ;; Thought: This results in a doubling of the number of forward passes, but could still
+                                  ;;          result in better training per unit time if the network converges faster.
+                                  gradient (nn-backend/array backend (map df nesterov-params))]
+                              (opt/compute-parameters! optimizer 1.0 0 gradient parameters)
+                              (recur (dec i)))))]
+    ;; Interestingly, in this simple case nesterov converges slightly _slower_ than normal momentum.
+    ;; When the loss is decreasing monotonically, that is when the params are haeded in the right
+    ;; direction, nesterov's looking ahead results in _smaller_ gradients and thus slower convergence.
+    ;; Nesterov could be more stable at higher learning rates which could make up for this.
+    ;; Seems testing on functions other than 1d (* x x) could prove the value better.
+    #_(println final-param-vec)
+    (is (every? #(< % 1e-6) final-param-vec))))
