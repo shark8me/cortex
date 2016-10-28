@@ -7,6 +7,6 @@
 
 
 
-(def ^:dynamic *driver* nil)
-(def ^:dynamic *stream* nil)
-(def ^:dymamic *datatype* :double)
+(def ^:dynamic *compute-binding* {:driver nil
+                                  :stream nil
+                                  :datatype nil})
