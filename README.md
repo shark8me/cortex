@@ -9,9 +9,6 @@ Cortex has been developed by [ThinkTopic](http://thinktopic.com) in collaboratio
 
 https://groups.google.com/forum/#!forum/clojure-cortex
 
-## Usage
-
-At this stage you will need to clone and install cortex yourself.  Once things have stabilized a bit we'll start publishing jars to Clojars.
 
 ## Cortex Design
 
