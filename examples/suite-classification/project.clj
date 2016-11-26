@@ -8,4 +8,5 @@
                  ;;If you have cuda-8.0 installed then add this:
                  [thinktopic/gpu-compute "0.1.0-8.0-SNAPSHOT"]]
   :main suite-classification.main
-  :aot [suite-classification.main])
+  :aot [suite-classification.main]
+  :uberjar-name "classify-mnist.jar")

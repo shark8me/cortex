@@ -190,14 +190,24 @@ to avoid overfitting the network to the training data."
   ([] (network-confusion (create-dataset))))
 
 
-(defn train-forever
-  []
-  (let [dataset (create-dataset)
-        last-app (atom nil)]
-    (classification/view-sample-batches dataset mnist-observation->image)
-    (doseq [_ (classification/create-train-network-sequence
-               dataset
-               (create-basic-mnist-description)
-               :best-network-fn (classification/create-confusion-app-best-network-fn
-                                 dataset mnist-observation->image)
-               :epoch-count 40)])))
+(defn train
+  [num-epochs]
+  (let [dataset (create-dataset)]
+    (if (nil? num-epochs)
+      (do
+        (println "training forever")
+        (classification/view-sample-batches dataset mnist-observation->image)
+        (doseq [_ (classification/create-train-network-sequence
+                   dataset
+                   (create-basic-mnist-description)
+                   :best-network-fn (classification/create-confusion-app-best-network-fn
+                                     dataset mnist-observation->image)
+                   :epoch-count 40)]))
+      (do
+        (println (format "training %s epochs" num-epochs))
+        ;;do not display swing ui in this mode.
+        (first
+         (classification/create-train-network-sequence
+          dataset
+          (create-basic-mnist-description)
+          :epoch-count (long num-epochs)))))))
