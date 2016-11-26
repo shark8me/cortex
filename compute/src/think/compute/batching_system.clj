@@ -3,7 +3,9 @@
             [think.compute.math :as math]
             [think.datatype.core :as dtype]
             [cortex.dataset :as ds]
-            [clojure.set :as c-set]))
+            [clojure.set :as c-set]
+            [think.parallel.core :as parallel])
+  (:import [java.util ArrayDeque]))
 
 
 (set! *warn-on-reflection* true)
@@ -33,17 +35,25 @@
 
 
 (defrecord DatasetBatchingSystem [input-names output-names ^long batch-size
-                                  dataset driver stream datatype])
+                                  dataset driver stream datatype
+                                  ^long batch-buffer-count])
 
-(defn create-dataset-batching-system [input-names output-names batch-size
-                                      dataset driver stream datatype]
+
+(defn create-dataset-batching-system
+  "Create the batching system to feed a dataset into a compute device.
+batch buffer count stands for the number of buffer sets to use; 2 would be
+double buffered batching, 3 would be triple buffer, etc."
+  [input-names output-names batch-size
+   dataset driver stream datatype
+   batch-buffer-count]
   (let [shapes (ds/shapes dataset)
         invalid-labels (vec (remove (set (keys shapes))
                                     (distinct (concat input-names output-names))))]
     (when-not (= 0 (count invalid-labels))
       (throw (Exception. (format "Dataset is missing entry names: %s" invalid-labels))))
     (->DatasetBatchingSystem input-names output-names batch-size
-                             dataset driver stream datatype)))
+                             dataset driver stream datatype
+                             (long batch-buffer-count))))
 
 
 (defn dataset-shape->array
@@ -68,20 +78,26 @@
 
 
 (defn create-batch-buffers
-  [^DatasetBatchingSystem batching-system names]
+  [^DatasetBatchingSystem batching-system names buffer-stream]
   (let [dataset (get-dataset batching-system)
         shapes (ds/shapes dataset)
         device (.driver batching-system)
         name-map (map #(vector
                         %
-                        (create-batch-buffer device (dataset-shape->array batching-system (get shapes %))))
+                        (create-batch-buffer device (dataset-shape->array batching-system
+                                                                          (get shapes %))))
                       names)]
-    (into {} name-map)))
+    {:batch-upload-stream buffer-stream
+     :buffer-map (into {} name-map)}))
 
-
-(defn upload-batch-data
-  [batch-data-seq {:keys [device-array host-buffer]} stream]
+(defn copy-batch-data->host!
+  [batch-data-seq {:keys [host-buffer] :as batch-buffer}]
   (dtype/copy-raw->item! batch-data-seq host-buffer 0)
+  batch-buffer)
+
+
+(defn copy-batch-host->device!
+  [{:keys [device-array host-buffer]} stream]
   (drv/copy-host->device stream
                          host-buffer 0
                          (math/device-buffer device-array) 0
@@ -89,36 +105,91 @@
   device-array)
 
 
+(defn upload-batch-data
+  [batch-data-seq batch-buffer stream]
+  (copy-batch-data->host! batch-data-seq batch-buffer)
+  (copy-batch-host->device! batch-buffer stream))
+
+
+(defn- deque-seq
+  [^ArrayDeque deque input-seq ^long buffer-depth]
+  (let [input-seq
+        (loop [deque-size (.size deque)
+               input-seq input-seq]
+          (if (and (< deque-size buffer-depth)
+                     (seq input-seq))
+            (let [seq-item (first input-seq)]
+              (.add deque seq-item)
+              (recur (.size deque)
+                     (rest input-seq)))
+            input-seq))]
+    (when (> (.size deque) 0)
+      (let [first-item (.remove deque)]
+        (cons first-item (lazy-seq (deque-seq deque input-seq buffer-depth)))))))
+
+
+(defn buffered-seq
+  "Given an input lazy sequence, realize up to N items ahead but produce
+the same sequence"
+  [^long buffer-depth input-seq]
+  (let [deque (ArrayDeque. buffer-depth)]
+    (deque-seq deque input-seq buffer-depth)))
+
+
 (extend-type DatasetBatchingSystem
   PBatchingSystem
   (setup [bs]
-    (assoc bs :buffer-map (create-batch-buffers bs (distinct (concat (.input-names bs) (.output-names bs))))))
+    (assoc bs
+           :buffer-maps (vec
+                         (repeatedly (.batch-buffer-count bs)
+                                     #(create-batch-buffers
+                                       bs
+                                       (distinct (concat (.input-names bs)
+                                                         (.output-names bs)))
+                                       (drv/create-stream
+                                        (.driver bs)))))
+           ))
 
   (get-batches [bs batch-type upload-output-buffers?]
     ;;Generate all the batches we are going to use.
     (let [dataset (.dataset bs)
           batch-size (.batch-size bs)
-          buffer-map (:buffer-map bs)
+          buffer-maps (:buffer-maps bs)
           names (distinct (if upload-output-buffers?
-                            (keys buffer-map)
+                            (keys (first buffer-maps))
                             (.input-names bs)))
           index->names (into {} (map-indexed vector names))
           name->indexes (c-set/map-invert index->names)
-          batches (ds/get-batches dataset batch-size batch-type names)
-          buffers (mapv buffer-map names)
           stream (.stream bs)
           output-names (if upload-output-buffers?
                          (.output-names bs)
                          [])]
-      (map (fn [batch-data]
-             ;;Upload batch to gpu
-             (let [device-buffers (-> (map (fn [batch-datum buffer]
-                                             (upload-batch-data batch-datum buffer stream))
-                                           batch-data buffers)
-                                      vec)]
-               {:input-buffers (mapv (comp device-buffers name->indexes) (.input-names bs))
-                :output-buffers (mapv (comp device-buffers name->indexes) output-names)}))
-           batches)))
+      ;;Use a buffered seq so that we allow the uploads to happen ahead of time
+      ;;without switching the cpu threads.  Cuda is especially sensitive to
+      ;;switching of threads so we want to avoid it if at all possible.
+      (->> (ds/get-batches dataset batch-size batch-type names)
+           (parallel/queued-pmap
+            (.batch-buffer-count bs)
+            (fn [{:keys [batch-upload-stream buffer-map]} batch-data
+                 buffers (mapv buffer-map names)]
+              (mapv (fn [batch-datum buffer]
+                      [batch-upload-stream
+                       (copy-batch-data->host! batch-datum buffer)])))
+            (mapcat identity (repeat buffer-maps)))
+
+           (map (fn [{:keys [batch-upload-stream buffer-map]} batch-data]
+                  ;;Upload batch to gpu
+                  (let [buffers (mapv buffer-map names)
+                        device-buffers (-> (map (fn [batch-datum buffer]
+                                                  (upload-batch-data batch-datum buffer
+                                                                     batch-upload-stream))
+                                                batch-data buffers)
+                                           vec)]
+                    (drv/sync-event stream (drv/create-event batch-upload-stream))
+                    {:input-buffers (mapv (comp device-buffers name->indexes) (.input-names bs))
+                     :output-buffers (mapv (comp device-buffers name->indexes) output-names)}))
+            )
+           (buffered-seq (.batch-buffer-count bs)))))
 
   (get-dataset [bs] (.dataset bs))
   (get-cpu-labels [bs batch-type]
