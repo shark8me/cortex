@@ -107,33 +107,8 @@ double buffered batching, 3 would be triple buffer, etc."
 
 (defn upload-batch-data
   [batch-data-seq batch-buffer stream]
-  (copy-batch-data->host! batch-data-seq batch-buffer)
-  (copy-batch-host->device! batch-buffer stream))
-
-
-(defn- deque-seq
-  [^ArrayDeque deque input-seq ^long buffer-depth]
-  (let [input-seq
-        (loop [deque-size (.size deque)
-               input-seq input-seq]
-          (if (and (< deque-size buffer-depth)
-                     (seq input-seq))
-            (let [seq-item (first input-seq)]
-              (.add deque seq-item)
-              (recur (.size deque)
-                     (rest input-seq)))
-            input-seq))]
-    (when (> (.size deque) 0)
-      (let [first-item (.remove deque)]
-        (cons first-item (lazy-seq (deque-seq deque input-seq buffer-depth)))))))
-
-
-(defn buffered-seq
-  "Given an input lazy sequence, realize up to N items ahead but produce
-the same sequence"
-  [^long buffer-depth input-seq]
-  (let [deque (ArrayDeque. buffer-depth)]
-    (deque-seq deque input-seq buffer-depth)))
+  (-> (copy-batch-data->host! batch-data-seq batch-buffer)
+      (copy-batch-host->device! stream)))
 
 
 (extend-type DatasetBatchingSystem
@@ -147,8 +122,7 @@ the same sequence"
                                        (distinct (concat (.input-names bs)
                                                          (.output-names bs)))
                                        (drv/create-stream
-                                        (.driver bs)))))
-           ))
+                                        (.driver bs)))))))
 
   (get-batches [bs batch-type upload-output-buffers?]
     ;;Generate all the batches we are going to use.
@@ -163,33 +137,36 @@ the same sequence"
           stream (.stream bs)
           output-names (if upload-output-buffers?
                          (.output-names bs)
-                         [])]
+                         [])
+          buffer-count (long (max 1 (.batch-buffer-count bs)))
+
+          batch->host! (fn [{:keys [batch-upload-stream buffer-map]} batch-data]
+                         (let [buffers (mapv buffer-map names)]
+                           [batch-upload-stream
+                            (mapv (fn [batch-datum buffer]
+                                    [batch-upload-stream
+                                     (copy-batch-data->host! batch-datum
+                                                             buffer)])
+                                  batch-data
+                                  buffers)]))
+          batch->host-map (if (= 1 buffer-count)
+                            (partial map batch->host!)
+                            (partial parallel/queued-pmap (- buffer-count 1) batch->host!))]
       ;;Use a buffered seq so that we allow the uploads to happen ahead of time
       ;;without switching the cpu threads.  Cuda is especially sensitive to
       ;;switching of threads so we want to avoid it if at all possible.
       (->> (ds/get-batches dataset batch-size batch-type names)
-           (parallel/queued-pmap
-            (.batch-buffer-count bs)
-            (fn [{:keys [batch-upload-stream buffer-map]} batch-data
-                 buffers (mapv buffer-map names)]
-              (mapv (fn [batch-datum buffer]
-                      [batch-upload-stream
-                       (copy-batch-data->host! batch-datum buffer)])))
-            (mapcat identity (repeat buffer-maps)))
-
-           (map (fn [{:keys [batch-upload-stream buffer-map]} batch-data]
-                  ;;Upload batch to gpu
-                  (let [buffers (mapv buffer-map names)
-                        device-buffers (-> (map (fn [batch-datum buffer]
-                                                  (upload-batch-data batch-datum buffer
-                                                                     batch-upload-stream))
-                                                batch-data buffers)
-                                           vec)]
-                    (drv/sync-event stream (drv/create-event batch-upload-stream))
-                    {:input-buffers (mapv (comp device-buffers name->indexes) (.input-names bs))
-                     :output-buffers (mapv (comp device-buffers name->indexes) output-names)}))
-            )
-           (buffered-seq (.batch-buffer-count bs)))))
+           (batch->host-map (mapcat identity (repeat buffer-maps)))
+           (map (fn [[stream buffers]]
+                  [stream (mapv #(copy-batch-host->device! % stream)
+                                buffers)]))
+           ;;Try to initiate parallel computation + upload
+           ;;by realizing n items of the lazy sequence.
+           (parallel/buffered-seq buffer-count)
+           (map (fn [[batch-upload-stream device-buffers]]
+                  (drv/sync-event stream (drv/create-event batch-upload-stream))
+                  {:input-buffers (mapv (comp device-buffers name->indexes) (.input-names bs))
+                   :output-buffers (mapv (comp device-buffers name->indexes) output-names)})))))
 
   (get-dataset [bs] (.dataset bs))
   (get-cpu-labels [bs batch-type]

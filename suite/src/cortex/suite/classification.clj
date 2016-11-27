@@ -50,17 +50,16 @@ and that the transformation from src item to a list of [label, patch]
 maintaines that class balance meaning applying that either produces
 roughly uniform sequences of label->patch.  The transformation from
 src item -> patch will be done in a threaded pool and fed into a queue
-with the result further slighly interleaved.
+with the result further interleaved.
 
 The final results will be pulled out of the sequence and shuffled so assuming
 your epoch element count is large enough the result will still be balanced and
 random regardless of this function's specific behavior for any specific src item."
   [src-item-seq item->patch-seq-fn & {:keys [queue-size]
                                       :or {queue-size 1000}}]
-  (let [{:keys [sequence shutdown-fn]} (parallel/queued-sequence queue-size
-                                                                 (* 2 (.availableProcessors (Runtime/getRuntime)))
-                                                                 item->patch-seq-fn
-                                                                 src-item-seq)]
+  (let [{:keys [sequence shutdown-fn]} (parallel/queued-pmap queue-size
+                                                             item->patch-seq-fn
+                                                             src-item-seq)]
     {:observations (mapcat identity sequence)
      :shutdown-fn shutdown-fn}))
 
