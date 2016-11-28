@@ -45,7 +45,9 @@ batch buffer count stands for the number of buffer sets to use; 2 would be
 double buffered batching, 3 would be triple buffer, etc."
   [input-names output-names batch-size
    dataset driver stream datatype
-   batch-buffer-count]
+   & {:keys [batch-buffer-count]
+      ;;Enable double buffering by default
+      :or {batch-buffer-count 2}}]
   (let [shapes (ds/shapes dataset)
         invalid-labels (vec (remove (set (keys shapes))
                                     (distinct (concat input-names output-names))))]
@@ -138,29 +140,46 @@ double buffered batching, 3 would be triple buffer, etc."
           output-names (if upload-output-buffers?
                          (.output-names bs)
                          [])
-          buffer-count (long (max 1 (.batch-buffer-count bs)))
-
-          batch->host! (fn [{:keys [batch-upload-stream buffer-map]} batch-data]
-                         (let [buffers (mapv buffer-map names)]
-                           [batch-upload-stream
-                            (mapv (fn [batch-datum buffer]
-                                    [batch-upload-stream
-                                     (copy-batch-data->host! batch-datum
-                                                             buffer)])
-                                  batch-data
-                                  buffers)]))
-          batch->host-map (partial parallel/queued-pmap (- buffer-count 1) batch->host!)]
+          buffer-count (long (max 1 (.batch-buffer-count bs)))]
       ;;Use a buffered seq so that we allow the uploads to happen ahead of time
       ;;without switching the cpu threads.  Cuda is especially sensitive to
       ;;switching of threads so we want to avoid it if at all possible.
+      ;;So it may not be clear but the use of laziness is extremely precise here.
+      ;;We have N host buffers and N device buffers.  We want to parallelize coalescing
+      ;;the batch into the host buffers and we want to upload the host buffers into
+      ;;the device buffers for then next batch while we are processing the current
+      ;;batch thus providing overlap of computing and memory copying.
+      ;;
+      ;;We know (from the documentation) that with a queued-pmap operation we can
+      ;;expect at most queue-depth+1 items in flight thus if we have n buffers we need to have
+      ;;a queue depth of n-1. So we schedule coalescing the batch data into an upload
+      ;;buffer using an offline thread pool allowing up to n items in flight
+      ;;(by using a depth of n-1).  We can do as many batches as we have memory for
+      ;;this way.
+      ;;
+      ;;We use a buffered seq *after* the host->device operation so that while we are
+      ;;processing batch x we are uploading batch x+1.  To do this we use a buffered-seq
+      ;;with a buffer-size maximum of 1 (and potentially 0 if we aren't using more than 1 buffer).
+      ;;
+      ;;Finally we place a synchronization event into the main compute stream so that we know
+      ;;before we start operating on the data the upload has finished from the upload stream.
       (->> (ds/get-batches dataset batch-size batch-type names)
-           (batch->host-map (mapcat identity (repeat buffer-maps)))
+           (parallel/queued-pmap (- buffer-count 1)
+                                 (fn [{:keys [batch-upload-stream buffer-map]} batch-data]
+                                   (let [buffers (mapv buffer-map names)]
+                                     [batch-upload-stream
+                                      (mapv (fn [batch-datum buffer]
+                                              (copy-batch-data->host! batch-datum
+                                                                      buffer))
+                                            batch-data
+                                            buffers)]))
+                                 (mapcat identity (repeat buffer-maps)))
            (map (fn [[stream buffers]]
                   [stream (mapv #(copy-batch-host->device! % stream)
                                 buffers)]))
            ;;Try to initiate parallel computation + upload
            ;;by realizing n items of the lazy sequence.
-           (parallel/buffered-seq buffer-count)
+           (parallel/buffered-seq (min 1 (- buffer-count 1)))
            (map (fn [[batch-upload-stream device-buffers]]
                   (drv/sync-event stream (drv/create-event batch-upload-stream))
                   {:input-buffers (mapv (comp device-buffers name->indexes) (.input-names bs))
@@ -174,6 +193,6 @@ double buffered batching, 3 would be triple buffer, etc."
           batch-size (.batch-size bs)
           batches (ds/get-batches dataset batch-size batch-type names)]
       (when (seq batches)
-        (mapv (fn [idx]
-                (mapcat #(nth % idx) batches))
-              (map name->indexes (.output-names bs)))))))
+        (map (fn [idx]
+               (mapcat #(nth % idx) batches))
+             (map name->indexes (.output-names bs)))))))
