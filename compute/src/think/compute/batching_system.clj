@@ -149,9 +149,7 @@ double buffered batching, 3 would be triple buffer, etc."
                                                              buffer)])
                                   batch-data
                                   buffers)]))
-          batch->host-map (if (= 1 buffer-count)
-                            (partial map batch->host!)
-                            (partial parallel/queued-pmap (- buffer-count 1) batch->host!))]
+          batch->host-map (partial parallel/queued-pmap (- buffer-count 1) batch->host!)]
       ;;Use a buffered seq so that we allow the uploads to happen ahead of time
       ;;without switching the cpu threads.  Cuda is especially sensitive to
       ;;switching of threads so we want to avoid it if at all possible.
