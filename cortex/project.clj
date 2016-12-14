@@ -1,4 +1,4 @@
-(defproject thinktopic/cortex "0.2.1-SNAPSHOT"
+(defproject thinktopic/cortex "0.3.1-SNAPSHOT"
   :description "A neural network toolkit for Clojure."
   :url "https://github.com/thinktopic/cortex"
   :license {:name "Eclipse Public License"
@@ -8,21 +8,21 @@
                  [org.clojure/test.check "0.9.0"]
                  [thinktopic/matrix.fressian "0.3.1"]
                  [net.mikera/vectorz-clj "0.45.0"]
-                 [net.mikera/core.matrix "0.54.0"]
-                 [thinktopic/caffe-protobuf "0.1.0"]
-                 [net.mikera/clojure-utils "0.7.0"]
-                 [core.blas "1.0.2"]
-                 [com.github.fommil.netlib/all "1.1.2" :extension "pom"]]
+                 [net.mikera/core.matrix "0.57.0"]
+                 [net.mikera/clojure-utils "0.7.1"]
+                 [com.github.fommil.netlib/all "1.1.2" :extension "pom"]
+                 [thinktopic/think.parallel "0.3.4"]
+                 [thinktopic/resource "1.1.0"]]
 
   :java-source-paths ["java"]
 
-  :profiles {:dev {:dependencies [[net.mikera/cljunit "0.4.1"]  ;; allows JUnit testing
+  :profiles {:dev {:dependencies [[net.mikera/cljunit "0.6.0"]  ;; allows JUnit testing
                                   [criterium/criterium "0.4.4"] ;; benchmarking tool
                                   ] ;; alternate core.matrix implementation
                    :source-paths ["src" "test/cljc" "test/clj"]
                    :java-source-paths ["test/clj"]}
 
-             :test {:dependencies [[net.mikera/cljunit "0.4.0"]
+             :test {:dependencies [[net.mikera/cljunit "0.6.0"]
                                    [criterium/criterium "0.4.4"]
                                    [clatrix "0.5.0" :exclusions [net.mikera/core.matrix]]]
                     :source-paths ["src" "test/cljc" "test/cljs" "test/clj"]

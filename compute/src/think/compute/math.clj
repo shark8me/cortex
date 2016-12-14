@@ -6,7 +6,7 @@ in here should be 100% portable across different compute drivers."
   (:require [clojure.core.matrix.protocols :as mp]
             [clojure.core.matrix :as m]
             [think.compute.driver :as drv]
-            [think.compute.datatype :as dtype]))
+            [think.datatype.core :as dtype]))
 
 (set! *warn-on-reflection* true)
 (set! *unchecked-math* :warn-on-boxed)
@@ -100,6 +100,10 @@ a[idx] = a[idx] < constraint ? 1.0 : constraint / a[idx]")
      2 (create-tensor batch-size 1 (quot ^long (first shape)
                                          batch-size)
                       (second shape))
+     3 (create-tensor batch-size (quot ^long (first shape)
+                                       batch-size)
+                      (second shape)
+                      (nth shape 2))
      (throw (Exception. "Unexpected shape")))))
 
 
@@ -365,9 +369,10 @@ being smaller than X so it can act as an accumulator for X."
    (let [x-elems (long (ecount x))
          y-elems (long (ecount y))
          res-elems (long (ecount result))]
-     (when (or (not= 0 (rem (max x-elems y-elems) (min x-elems y-elems)))
-               (not= 0 (rem (max x-elems res-elems) (min x-elems res-elems))))
-       (throw (Exception. "Vector lengths are not correct")))
+     (if-not (zero? (rem (max x-elems y-elems) (min x-elems y-elems)))
+       (throw (Exception. (format "Sum: Lengths of x (%s) and y (%s) are not commensurate" x-elems y-elems))))
+     (if-not (zero? (rem (max x-elems res-elems) (min x-elems res-elems)))
+       (throw (Exception. (format "Sum: Lengths of x (%s) and res (%s) are not commensurate" x-elems res-elems))))
      (sum-impl stream alpha (device-buffer x) beta (device-buffer y) (device-buffer result))))
   ([stream alpha x beta y]
    (sum stream alpha x beta y y)))

@@ -1,5 +1,5 @@
 (ns think.compute.javacpp-datatype
-  (:require [think.compute.datatype :as dtype]
+  (:require [think.datatype.core :as dtype]
             [clojure.core.matrix.protocols :as mp])
   (:import [org.bytedeco.javacpp
             BytePointer IntPointer LongPointer DoublePointer
@@ -9,6 +9,16 @@
 
 (set! *warn-on-reflection* true)
 (set! *unchecked-math* :warn-on-boxed)
+
+
+;;!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+;; disable the javacpp auto-gc system.  This causes spurious OOM errors
+;; and runs the GC endlessly at times when the amount of C++ memory allocated
+;; is large compared to the maximum java heap size.
+
+
+(System/setProperty "org.bytedeco.javacpp.nopointergc" "true")
+
 
 
 (extend-protocol dtype/PDatatype

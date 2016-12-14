@@ -1,7 +1,7 @@
 (ns think.compute.nn.cuda-backend
   (:require [think.compute.cuda-driver :refer [->ptr value->ptr] :as cuda-drv]
             [think.compute.javacpp-datatype :as jcpp-dtype]
-            [think.compute.datatype :as dtype]
+            [think.datatype.core :as dtype]
             [think.compute.driver :as drv]
             [think.compute.optimise :as opt]
             [think.compute.nn.backend :as nn-backend]
@@ -893,9 +893,21 @@ Backward Data: %s %d"
       (contains? #{:relu :tanh :sigmoid} layer-type)
       (create-activation-layer backend batch-size output-size layer-type)
       (= layer-type :softmax)
-      (->SoftmaxLayer backend (create-tensor (dtype/get-datatype backend)
-                                             (:batch-size layer-desc)
-                                             (:output-size layer-desc) 1 1))
+      (let [n-channels (long (get layer-desc :channels 1))
+            tensor (if-not (= n-channels 1)
+                     (create-tensor (dtype/get-datatype backend)
+                                    cudnn/CUDNN_TENSOR_NHWC
+                                    (:batch-size layer-desc)
+                                    n-channels
+                                    1
+                                    (quot (:output-size layer-desc)
+                                          n-channels))
+                     (create-tensor (dtype/get-datatype backend)
+                                    (:batch-size layer-desc)
+                                    (:output-size layer-desc)
+                                    1
+                                    1))]
+        (->SoftmaxLayer backend tensor))
       (= layer-type :convolution)
       (create-conv-layer backend (:conv-config layer-desc) batch-size)
       (= layer-type :max-pooling)

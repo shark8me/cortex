@@ -1,6 +1,6 @@
 (ns think.compute.cuda-driver
   (:require [think.compute.driver :as drv]
-            [think.compute.datatype :as dtype]
+            [think.datatype.core :as dtype]
             [clojure.java.io :as io]
             [think.resource.core :as resource]
             [think.compute.javacpp-datatype :as jcpp-dtype]
@@ -92,8 +92,6 @@
        (throw (Exception. (format "cuRAND error: %s" (curand-error-to-string retval#)))))
      retval#))
 
-(defonce init-result (cuda-call (cuda/cuInit 0)))
-
 
 (defn zero-term-array-to-string
   [^"[B" byte-ary]
@@ -164,6 +162,7 @@
 (defn- local-create-context
   [device-id]
   (let [retval (cuda$CUctx_st.)]
+    (cuda-call (cuda/cuInit 0))
     (let [device-id (or device-id (first-valid-device))]
       (cuda-call (cuda/cuCtxCreate retval 0 device-id))
       retval)))
