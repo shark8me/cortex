@@ -201,10 +201,12 @@
   "Train forever. This function never returns."
   [initial-description train-ds test-ds
    train-args]
-  (let [network (network/linear-network initial-description)]
+  (let [network (network/linear-network initial-description)
+        targs(-> train-args seq flatten)]
+    (println "targs " targs)
     (apply (partial experiment-train/train-n network
                     train-ds test-ds)
-           (-> train-args seq flatten))))
+           targs)))
 
 (defn- display-dataset-and-model
   "Starts the web server that gives real-time training updates."
@@ -265,16 +267,18 @@
   return a map with the updated network.
   As a side-effect, stream the train/test loss as well as all buffers 
   as tensorboard events, appended to the file-path argument"
-  [file-path
+   [{:keys [file-path class-mapping metric-fn]}
    {:keys [batch-size context]}
    {:keys [new-network old-network test-ds train-ds]}] ;;change per epoch
   (let [batch-size (long batch-size)
+        vec->label (vec->label-fn class-mapping)
         get-label (fn [dset] (execute/run new-network dset
                                           :batch-size batch-size
                                           :loss-outputs? true
-                                          :context context))
-        labels (get-label test-ds)
-        loss-on (fn [dset] (execute/execute-loss-fn new-network labels dset))
+                               :context context))
+        ;;predicted labels
+        pred-labels (get-label test-ds)
+        loss-on (fn [dset] (execute/execute-loss-fn new-network pred-labels dset))
         cv-loss (loss-on test-ds)
         test-loss (apply + (map :value cv-loss))
         train-loss (apply + (map :value (loss-on train-ds)))
@@ -283,19 +287,29 @@
                   (mapv (partial str "metrics/")
                         ["train-loss" "test-loss"])
                   [train-loss test-loss])
+
+        ;;collect predicted and actuals 
+        
+        ;;run all the metrics
+        _ (if-not (nil? metric-fn)
+            (let [label-fn #(mapv (fn [i] (vec->label (:labels i))) %)
+                  [predicted actual] (mapv label-fn [pred-labels test-ds])]
+              (metric-fn actual predicted)))
+        
         evs (into evs (log-weights new-network))
+        _ (println "train test loss" [train-loss test-loss])
         _ (eio/append-events file-path evs)]
     {:network (assoc new-network :cv-loss cv-loss)}))
 
 (defn create-tensorboard-listener
   "initializes any prerequisites for listening functions, and returns a listener
   function. Takes a file-path argument where the events are logged to. "
-  [{:keys [file-path]}]
+  [{:keys [file-path] :as m}]
   (fn [initial-description train-ds test-ds]
     (do
-      (println "create-tensorboard-listener ")
+      (println "create-tensorboard-listener, events piped to " file-path)
       (eio/create-event-stream file-path)
-      (partial tensorboard-log file-path))))
+      (partial tensorboard-log m))))
 
 (defn perform-experiment
   "Main entry point:
