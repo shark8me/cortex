@@ -11,8 +11,8 @@
     :long-opt "--live-updates"
     :id :live-updates?
     :default false]
-   ["-t" "--tensorboard-output value" "Output metrics to tensorboard"
-    :id :tensorboard-output 
+   ["-t" "--tensorboard value" "Output metrics to tensorboard"
+    :id :file-path
     :default false]])
 
 (defn -main

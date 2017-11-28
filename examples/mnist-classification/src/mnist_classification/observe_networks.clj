@@ -45,8 +45,8 @@
         (experiment-util/create-dataset-from-folder class-mapping))))
 
 (defn train-network
-  ([argmap] (train-network argmap (train-seq) (test-seq)))
-  ([argmap train-ds test-ds]
+  ([argmap] (train-network (train-seq) (test-seq) argmap ))
+  ([train-ds test-ds argmap ]
    (mcc/ensure-images-on-disk!)
    (println "Training for " (:epoch-count argmap) " epochs ")
    (let [listener (classification/create-tensorboard-listener
@@ -70,32 +70,62 @@
                          (vector fn-name
                                  (mfn actual predicted))) metrics)
           ;;stream it to tensorboard event file
-          _ (doseq [[iname v] scores]
-              (eio/make-event iname v))]
-      (println "metrics recorded" (clojure.string/join " , " scores )))))
+          _ (println (str "act " (vec (take 2 actual)) " pred " (vec (take 2 predicted))))
+          evs (mapv (fn[[iname v]]
+                      (eio/make-event iname v) )scores)]
+      (println "metrics recorded" (clojure.string/join " , " scores ))
+      evs)))
+
+(defn per-class-metric-fn
+  [metric]
+  (fn[actual predicted]
+    (let [;;run all the metrics
+          pairs (mapv (fn[i] (filterv (fn[[a b]] (= i a))
+                                      (mapv vector actual predicted)))
+                      (mapv str (range 9)))
+          kfn (fn[i] [(mapv first i) (mapv second i)])
+          scores (mapv #(apply metric (kfn %)) pairs)
+          
+          ;;stream it to tensorboard event file
+          evs (mapv #(eio/make-event %1 %2)
+                    (mapv str (range 9))
+                    scores)
+          ]
+      (println "metrics recorded" (clojure.string/join " , " scores ))
+      evs)))
+
+(def metr-3
+  (metric-fn [{:mfn micro-avg-precision 
+               :fn-name "precision"}
+              {:mfn mcm/macro-avg-precision
+               :fn-name "macro precision"}
+              {:mfn accuracy
+               :fn-name "accuracy"}]))
 
 (defn trainres
-  [args]
-  (let [initargs {:batch-size 128 :epoch-count 2 }
-        log-path "/tmp/tflogs/"
-        net-name "simple20"
-        tfargs {:tensorboard (assoc (touch-event-file! log-path net-name)
-                                    :class-mapping class-mapping
-                                    :metric-fn
-                                    (metric-fn [{:mfn micro-avg-precision 
-                                                 :fn-name "precision"}
-                                                {:mfn mcm/macro-avg-precision
-                                                 :fn-name "macro precision"}
-                                                {:mfn accuracy
-                                                 :fn-name "accuracy"}]))}
-        argmap (merge initargs tfargs)]
-    (train-network argmap)))
+  ([] (trainres train-network))
+  ([train-fn]
+   (let [log-path "/tmp/tflogs/"
+         net-name "simple201"
+         tfargs 
+         {:tensorboard (assoc
+                        (touch-event-file! log-path net-name)
+                        :class-mapping class-mapping
+                        ;:metric-fn metr-3
+                        :metric-fn (per-class-metric-fn accuracy)
+                        )}]
+     (trainres tfargs train-fn)))
+  ([tfargs train-fn]
+   (let [initargs {:batch-size 128 :epoch-count 2 }
+         argmap (merge initargs tfargs)]
+     (train-fn argmap))))
+
 (comment
-  (def tres (trainres {}))
-  (-> trainres
-      :cv-loss
-                                        ; second
-      ))
+  (def tres
+    (try (trainres)
+         (catch Exception e
+           (println " caught excception " e))))
+  )
 
 (defn infinite-class-unbalanced-seq
   [map-seq & {:keys [class-key]}]
@@ -121,9 +151,22 @@
   (->> (infinite-class-unbalanced-seq map-seq :class-key class-key)
        (partition epoch-size)))
 
-(comment 
-  (let [initargs {:batch-size 128 :epoch-count 1}
-        log-path "/tmp/tflogs/"
-        argmap (merge initargs (touch-event-file! log-path "two-conv-layers-unbalanced"))]
-    (train-network argmap (train-seq infinite-class-unbalanced-dataset)
-                   (test-seq))))
+(defn trainres2
+  []
+  (let [log-path "/tmp/tflogs/"
+        net-name "simple20"
+        tfargs 
+        {:tensorboard (assoc
+                       (touch-event-file! log-path net-name)
+                       :class-mapping class-mapping
+                       :metric-fn metr-3)}]
+    (trainres tfargs (partial
+                      train-network
+                      (train-seq infinite-class-unbalanced-dataset)
+                              (test-seq)))))
+(comment
+  (def tres
+    (try (trainres2)
+         (catch Exception e
+           (println " caught excception " e))))
+  )

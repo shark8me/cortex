@@ -137,15 +137,14 @@
                                  (experiment-util/infinite-class-balanced-dataset))
                              (-> test-folder
                                  (experiment-util/create-dataset-from-folder class-mapping)) ]
-         listener (if-let [file-path (:tensorboard-output argmap)]
-                    (classification/create-tensorboard-listener 
-                          {:file-path file-path})
+         listener (if (:file-path argmap)
+                    (classification/create-tensorboard-listener argmap)
                     (classification/create-listener mnist-observation->image
                                                     class-mapping
                                                     argmap))]
      (classification/perform-experiment
       (initial-description image-size image-size num-classes)
-      train-ds test-ds listener))))
+      train-ds test-ds listener argmap))))
 
 (defn train-forever-uberjar
   ([] (train-forever-uberjar {}))
