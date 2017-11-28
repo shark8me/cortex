@@ -203,7 +203,6 @@
    train-args]
   (let [network (network/linear-network initial-description)
         targs(-> train-args seq flatten)]
-    (println "targs " targs)
     (apply (partial experiment-train/train-n network
                     train-ds test-ds)
            targs)))
@@ -277,27 +276,26 @@
                                           :loss-outputs? true
                                :context context))
         ;;predicted labels
-        pred-labels (get-label test-ds)
-        loss-on (fn [dset] (execute/execute-loss-fn new-network pred-labels dset))
-        cv-loss (loss-on test-ds)
+        pred-test-labels (get-label test-ds)
+        loss-on (fn [dset labels] (execute/execute-loss-fn new-network labels dset))
+        cv-loss (loss-on test-ds pred-test-labels)
         test-loss (apply + (map :value cv-loss))
-        train-loss (apply + (map :value (loss-on train-ds)))
+        train-loss (apply + (map :value (loss-on train-ds (get-label train-ds))))
         ;;log train and test loss
         evs (mapv eio/make-event
                   (mapv (partial str "metrics/")
                         ["train-loss" "test-loss"])
                   [train-loss test-loss])
 
-        ;;collect predicted and actuals 
-        
         ;;run all the metrics
-        _ (if-not (nil? metric-fn)
+        met-events (if-not (nil? metric-fn)
             (let [label-fn #(mapv (fn [i] (vec->label (:labels i))) %)
-                  [predicted actual] (mapv label-fn [pred-labels test-ds])]
+                  [predicted actual] (mapv label-fn [pred-test-labels test-ds])]
               (metric-fn actual predicted)))
         
-        evs (into evs (log-weights new-network))
-        _ (println "train test loss" [train-loss test-loss])
+        evs (into met-events (into evs (log-weights new-network)))
+        _ (println " train test loss " (clojure.string/join
+                                        " , " [train-loss test-loss]))
         _ (eio/append-events file-path evs)]
     {:network (assoc new-network :cv-loss cv-loss)}))
 
